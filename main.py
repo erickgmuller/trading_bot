@@ -30,7 +30,7 @@ def get_dt():
 
 
 def last_top(dt):
-    last100 = dt.tail(100)
+    last100 = dt.tail(60)
     temp = dt.tail(1)
 
     for index, candle in last100.iterrows():
@@ -40,7 +40,7 @@ def last_top(dt):
 
 
 def last_bot(dt):
-    last100 = dt.tail(100)
+    last100 = dt.tail(60)
     temp = dt.tail(1)
     for index, candle in last100.iterrows():
         if float(candle['low']) < float(temp['low']):
@@ -56,28 +56,27 @@ def fibonacci(dt):
     tend = tendencia(dt)
     levels = {}
 
+
     if tend == 'p':
-        levels = {'0': bot, '38.2': (bot + (diff * 0.382)), '50': (bot + (diff * 0.5)), '61.8': (bot + diff * 0.618),
-                  '100': top, "150": (top + diff*0.5)}
+        levels = {'0': bot['low'], '38.2': (bot['low'] + float(diff['low'] * 0.382)), '50': (bot['low'] + float(diff['low'] * 0.5)), '61.8': (bot['low'] + float(diff['low'] * 0.618)),
+                  '100': top['high'], "150": (top['high'] + float(diff['low']*0.5))}
     elif tend == 'n':
-        levels = {'0': top, '38.2': (top - (diff * 0.382)), '50': (top - (diff * 0.5)), '61.8': (top - diff * 0.618),
-                  '100': bot, "150": (bot - diff * 0.5)}
+        levels = {'0': top['high'], '38.2': (top['high'] - float(diff['low'] * 0.382)), '50': (top['high'] - float(diff['low'] * 0.5)), '61.8': (top['high'] - float(diff['low'] * 0.618)),
+                  '100': bot['low'], "150": (bot['low'] - float(diff['low'] * 0.5))}
 
     return levels
 
 
 def tendencia(dt):
-    last100 = dt.tail(100)
+    last100 = dt.tail(60)
     negPoints = 0
     posPoints = 0
 
     for index, candle in last100.iterrows():
-        if candle['open'] < candle['close'] and candle['close'] > candle['MA20'] and (
-                candle['close'] - candle['open']) > 50:
+        if float(candle['open']) < float(candle['close']) and float(candle['close']) > float(candle['MA20']):
             # Candle positivo e fechamento acima da média de 20, corpo de 50 pts
             posPoints += 1
-        elif candle['open'] > candle['close'] and candle['close'] < candle['MA20'] and (
-                candle['open'] - candle['close']) > 50:
+        elif float(candle['open']) > float(candle['close']) and float(candle['close']) < float(candle['MA20']):
             # Candle negativo e fechamento abaixo da média de 20, corpo de 50 pts
             negPoints += 1
 
@@ -106,21 +105,23 @@ def ponto_continuo(dt):
     # 2 - De acordo com a tendência, analisar se é ponto contínuo
 
     if tend == 'n':
-        if lastCandle['MA20'] > lastCandle['MA9']:
-            if (lastCandle['open'] - lastCandle['MA20']) <= 10 or (lastCandle['high'] - lastCandle['MA20']) <= 10:
-                if lastCandle['close'] < lastCandle['MA9']:
+        if float(lastCandle['MA20']) > float(lastCandle['MA9']):
+            if abs(float(lastCandle['MA20']) - float(lastCandle['open'])) <= 10 or abs(float(lastCandle['MA20']) - float(lastCandle['high'])) <= 10:
+                if float(lastCandle['close']) < float(lastCandle['MA9']):
                     return 'SELL'
         else:
             return 'NONE'
     elif tend == 'p':
         if float(lastCandle['MA20']) < float(lastCandle['MA9']):
-            if float((lastCandle['open'] - lastCandle['MA20'])) <= 10 or float((lastCandle['low'] - lastCandle['MA20'])) <= 10:
+            if abs(float((lastCandle['open'] - lastCandle['MA20']))) <= 10 or abs(float((lastCandle['low'] - lastCandle['MA20']))) <= 10:
                 if float(lastCandle['close']) > float(lastCandle['MA9']):
                     return 'BUY'
         else:
             return 'NONE'
     elif tend == 'c':
         print('Aviso: ativo em tendência de consolidação. Programa aguardará o ativo entrar em alta ou baixa')
+        return 'NONE'
+    else:
         return 'NONE'
 
 
@@ -143,6 +144,8 @@ def send_order(dt, order_type):
         order_type = mt5.ORDER_TYPE_BUY
     elif order_type == 'SELL':
         order_type = mt5.ORDER_TYPE_SELL
+    else:
+        exit()
 
     fibo = fibonacci(get_dt())
 
@@ -185,7 +188,9 @@ def send_order(dt, order_type):
 
 def monitor():
     while True:
-        print("---- Novo Candle ----")
+        print("\n")
+        print("------------------------------------------------------------------")
+        print("------------------------- Nova Interação -------------------------")
         temp = get_dt()
         temp = temp.tail(1)
         now = datetime.now()
@@ -199,18 +204,29 @@ def monitor():
 
         timeforsleep = end - now
         timeforsleep = timeforsleep.dt.total_seconds()
-        printCandle = start.dt.strftime("%H:%M")
-        print("Último candle foi: ", type(printCandle))
-        print("Sleeping: " + str(timeforsleep.values[0]) + " seconds")
+
+        # Fazendo dormir até o próximo candle fechar
+        print("Dormindo: " + str(timeforsleep.values[0]) + " segundos até o próximo candle fechar")
         time.sleep(float(timeforsleep.values[0]))
 
         temp = get_dt()
         pc = ponto_continuo(temp)
-        if pc != 'NONE':
-            print("Ponto Contínuo achado: ", pc)
-            send_order(temp, pc)
+
+        # Printando o candle analisado
+        printCandle = pd.to_datetime(temp.tail(1)['time'])
+        printCandle = printCandle.dt.strftime("%H:%M")
+        print("Candle analisado:", printCandle.values[0])
+
+        if(type(pc) == 'str'):
+            pc = pc.strip()
         else:
+            print(pc)
+
+        if pc == 'NONE' or pc == 'None' or type(pc) == 'class':
             print("Não é ponto contínuo")
+        else:
+            print("Ponto Contínuo achado:", pc)
+            send_order(temp, pc)
 
         time.sleep(1)
 
