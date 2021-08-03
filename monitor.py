@@ -3,22 +3,26 @@ import time
 import pytz
 from datetime import datetime, timedelta
 import pandas as pd
+import os
+from dotenv import load_dotenv
 
-SYMBOL = "WIN$"
-LOT = 0.1
-# Inicializando o MT5 e
-
-if not mt5.initialize():
-    print("initialize() failed, error code=", mt5.last_error())
-
-timezone = pytz.timezone("America/Sao_Paulo")
-
+load_dotenv()
+SYMBOL = os.getenv('SYMBOL')
+LOT = os.getenv('LOT')
 
 def get_dt():
+
+    # Inicializando o MT5 e
+
+    if not mt5.initialize():
+        print("initialize() failed, error code=", mt5.last_error())
+
+    timezone = pytz.timezone("America/Sao_Paulo")
+
     # set time zone to UTC
     now = datetime.now(timezone)
 
-    rates = mt5.copy_rates_from(SYMBOL, mt5.TIMEFRAME_M1, now, 1000)
+    rates = mt5.copy_rates_from(SYMBOL, mt5.TIMEFRAME_M1, now, 9999)
 
     dt = pd.DataFrame(rates)
     dt['time'] = pd.to_datetime(dt['time'], unit='s')
@@ -30,7 +34,7 @@ def get_dt():
 
 
 def last_top(dt):
-    last100 = dt.tail(60)
+    last100 = dt.tail(30)
     temp = dt.tail(1)
 
     for index, candle in last100.iterrows():
@@ -40,7 +44,7 @@ def last_top(dt):
 
 
 def last_bot(dt):
-    last100 = dt.tail(60)
+    last100 = dt.tail(30)
     temp = dt.tail(1)
     for index, candle in last100.iterrows():
         if float(candle['low']) < float(temp['low']):
@@ -68,7 +72,7 @@ def fibonacci(dt):
 
 
 def tendencia(dt):
-    last100 = dt.tail(60)
+    last100 = dt.tail(30)
     negPoints = 0
     posPoints = 0
 
@@ -105,16 +109,16 @@ def ponto_continuo(dt):
     # 2 - De acordo com a tendência, analisar se é ponto contínuo
 
     if tend == 'n':
-        if float(lastCandle['MA20']) > float(lastCandle['MA9']):
+        if float(lastCandle['MA20']) > float(lastCandle['MA9']) and float((lastCandle['open']) - float(lastCandle['close']) > 50):
             if abs(float(lastCandle['MA20']) - float(lastCandle['open'])) <= 10 or abs(float(lastCandle['MA20']) - float(lastCandle['high'])) <= 10:
-                if float(lastCandle['close']) < float(lastCandle['MA9']):
+                if float(lastCandle['close']) <= float(lastCandle['MA9']):
                     return 'SELL'
         else:
             return 'NONE'
     elif tend == 'p':
-        if float(lastCandle['MA20']) < float(lastCandle['MA9']):
+        if float(lastCandle['MA20']) < float(lastCandle['MA9']) and float((lastCandle['close']) - float(lastCandle['open']) > 50):
             if abs(float((lastCandle['open'] - lastCandle['MA20']))) <= 10 or abs(float((lastCandle['low'] - lastCandle['MA20']))) <= 10:
-                if float(lastCandle['close']) > float(lastCandle['MA9']):
+                if float(lastCandle['close']) >= float(lastCandle['MA9']):
                     return 'BUY'
         else:
             return 'NONE'
@@ -128,6 +132,8 @@ def ponto_continuo(dt):
 def send_order(dt, order_type):
     # Confirma se a ação realmente existe
 
+    print("Enviando ordem de ", order_type, " para o  servidor")
+
     symbol_info = mt5.symbol_info(SYMBOL)
     if symbol_info is None:
         print(SYMBOL, " não foi achado")
@@ -138,16 +144,20 @@ def send_order(dt, order_type):
 
     point = mt5.symbol_info(SYMBOL).point
     price = mt5.symbol_info_tick(SYMBOL).ask
+
     deviation = 20
+    fibo = fibonacci(get_dt())
+    tp = fibo['150'] * point
 
     if order_type == 'BUY':
         order_type = mt5.ORDER_TYPE_BUY
+        sl = fibo['0'] - 50 * point
+
     elif order_type == 'SELL':
         order_type = mt5.ORDER_TYPE_SELL
+        sl = fibo['0'] + 50 * point
     else:
         exit()
-
-    fibo = fibonacci(get_dt())
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -155,15 +165,15 @@ def send_order(dt, order_type):
         "volume": LOT,
         "type": order_type,
         "price": price,
-        "sl": fibo['0'] - 50,
-        "tp": fibo['150'],
+        "sl": sl,
+        "tp": tp,
         "deviation": deviation,
         "magic": 234000,
         "comment": "Abrindo ordem pelo script",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_RETURN,
     }
-
+    print(request)
     # Enviando o request e checando o retorno do MT5
     result = mt5.order_send(request)
     print("1. order_send(): by {} {} lots at {} with deviation={} points".format(SYMBOL, LOT, price, deviation));
@@ -200,35 +210,35 @@ def monitor():
         if (lastStop == start.values):
             break
 
-        end = start + timedelta(minutes=1)
-
-        timeforsleep = end - now
-        timeforsleep = timeforsleep.dt.total_seconds()
-
-        # Fazendo dormir até o próximo candle fechar
-        print("Dormindo: " + str(timeforsleep.values[0]) + " segundos até o próximo candle fechar")
-        time.sleep(float(timeforsleep.values[0]))
+        # Checando se o último candle foi um PC
 
         temp = get_dt()
         pc = ponto_continuo(temp)
 
-        # Printando o candle analisado
         printCandle = pd.to_datetime(temp.tail(1)['time'])
         printCandle = printCandle.dt.strftime("%H:%M")
         print("Candle analisado:", printCandle.values[0])
 
-        if(type(pc) == 'str'):
+        if (type(pc) == 'str'):
             pc = pc.strip()
-        else:
-            print(pc)
 
-        if pc == 'NONE' or pc == 'None' or type(pc) == 'class':
+        if pc is None or pc == 'NONE':
             print("Não é ponto contínuo")
         else:
             print("Ponto Contínuo achado:", pc)
             send_order(temp, pc)
 
-        time.sleep(1)
+        # Dorminndo até o próximo candle
 
+        end = start + timedelta(minutes=1)
 
-monitor()
+        timeforsleep = end - now
+        timeforsleep = timeforsleep.dt.total_seconds()
+
+        print("Dormindo: " + str(timeforsleep.values[0]) + " segundos até o próximo candle fechar")
+        time.sleep(float(timeforsleep.values[0]))
+
+        # Delay
+        time.sleep(2)
+
+#monitor()
