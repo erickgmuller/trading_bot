@@ -1,27 +1,20 @@
 import pandas as pd
-from strategy_tester import is_ponto_continuo
-from data_analiser import get_dt
+from data_handler import get_dt
 import MetaTrader5 as mt5
 import matplotlib.pyplot as plt
 from sklearn.feature_selection import SelectKBest
-from sklearn.model_selection import GridSearchCV
-from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import MinMaxScaler
 from sklearn import datasets, linear_model
 from sklearn.metrics import mean_squared_error, r2_score
 import matplotlib.pyplot as plt
+import talib
 
 if not mt5.initialize():
     print("initialize() failed, error code=", mt5.last_error())
 
 # Pega o dataframe e da um shift para mudar o fechamento para -1 candle e assim "prever" o próximo
-df_win = get_dt()
-for index, row in df_win.iterrows():
-    if is_ponto_continuo(row):
-        df_win.loc[index, 'target'] = 1
-    else:
-        df_win.loc[index, 'target'] = 0
-
+df_win = get_dt('M5')
+df_win['SMA200'] = talib.SMA(df_win['close'].values, 200)
 df_win['close'] = df_win['close'].shift(-1)
 # Drop nas informações nulas (modelo de analise de features não recebe valores nulos)
 df_win.dropna(inplace=True)

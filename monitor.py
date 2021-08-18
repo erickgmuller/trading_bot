@@ -2,9 +2,10 @@ import time
 import MetaTrader5 as mt5
 from datetime import datetime, timedelta
 import pandas as pd
-from data_analiser import get_dt, ponto_continuo, send_order, symbol_verifier
+from data_handler import get_dt, ponto_continuo, send_order, symbol_verifier
 import os
 from dotenv import load_dotenv
+import threading
 
 load_dotenv()
 SYMBOL = os.getenv('SYMBOL')
@@ -14,10 +15,10 @@ SYMBOL = os.getenv('SYMBOL')
 if not mt5.initialize():
     print("initialize() failed, error code=", mt5.last_error())
 
-def monitor(symbol, timeframe='M5'):
+def monitor(timeframe = 'M2'):
 
     # Verifica se o ativo está realmente linkado a conta da corretora
-    if not symbol_verifier():
+    if not symbol_verifier(SYMBOL):
         print("Ativo não encontrado dentro da corretora")
         exit
 
@@ -25,13 +26,13 @@ def monitor(symbol, timeframe='M5'):
     delay = timedelta()
     if(len(timeframe) == 2):
         if(timeframe[0] == 'M'):
-            delay = timedelta(minutes=int(timeframe[0]))
+            delay = timedelta(minutes=int(timeframe[1]))
         elif(timeframe[0] == 'H'):
-            delay = timedelta(hours=int(timeframe[0]))
+            delay = timedelta(hours=int(timeframe[1]))
         elif(timeframe[0] == 'D'):
-            delay = timedelta(days=int(timeframe[0]))
+            delay = timedelta(days=int(timeframe[1]))
         elif(timeframe[0] == 'W'):
-            delay = timedelta(weels=int(timeframe[0]))
+            delay = timedelta(weels=int(timeframe[1]))
     elif (len(timeframe) == 3):
         if (timeframe[0] == 'M' and timeframe[1].isnumeric()):
             delay = timedelta(minutes=int(timeframe[1:2]))
@@ -45,14 +46,17 @@ def monitor(symbol, timeframe='M5'):
         print("\n")
         print("------------------------------------------------------------------")
         print("------------------------- Nova Interação -------------------------")
+        print("Thread do timeframe: ", timeframe)
+        # Checando se o dia do último candle é o mesmo.
+        dt = get_dt(timeframe)
+
+        if(dt.tail(1)['time'].dt.dayofweek.values < datetime.today().weekday()):
+            print("Esperando candle fechar no dia de hoje")
+            time.sleep(60)
+            continue
 
         # Checando se o último candle foi um PC
-        dt = get_dt()
         pc = ponto_continuo(dt)
-
-        printCandle = pd.to_datetime(dt.tail(1)['time'])
-        printCandle = printCandle.dt.strftime("%H:%M")
-        print("Candle analisado:", printCandle.values[0])
 
         if (type(pc) == 'str'):
             pc = pc.strip()
@@ -61,23 +65,34 @@ def monitor(symbol, timeframe='M5'):
             print("Não é ponto contínuo")
         elif pc == 'c':
             pass
-        else:
+        elif pc == 'BUY' or pc == 'SELL':
             print("Ponto Contínuo achado:", pc)
-            send_order(pc)
+            send_order(pc, timeframe)
+
+        # Printando o candle que foi analisado
+        printCandle = pd.to_datetime(dt.tail(1)['time'])
+        printCandle = printCandle.dt.strftime("%H:%M")
+        print("Candle analisado:", printCandle.values[0])
 
         # Dorminndo até o próximo candle
-
-        end = pd.to_datetime(dt.tail(1)['time']) + delay
         now = datetime.now()
+        end = pd.to_datetime(dt.tail(1)['time']) + delay * 2
 
-        if symbol == 'USDJPY':
-            timeforsleep = end - (now + timedelta(hours=6))
-        else:
+        if SYMBOL == 'WINQ21':
             timeforsleep = end - now
+        else:
+            timeforsleep = end - (now + timedelta(hours=6))
 
         print("Dormindo: ", float(timeforsleep.dt.total_seconds()), " segundos até o próximo candle")
-        time.sleep((abs(int(timeforsleep.dt.total_seconds()))) + 10)
+        time.sleep((abs(int(timeforsleep.dt.total_seconds()))) + 5)
 
+m1 = threading.Thread(target=monitor, args=('M1',))
+m2 = threading.Thread(target=monitor, args=('M2',))
+m5 = threading.Thread(target=monitor, args=('M5',))
 
+m1.start()
+time.sleep(2)
+m2.start()
+time.sleep(2)
+m5.start()
 
-monitor(SYMBOL)

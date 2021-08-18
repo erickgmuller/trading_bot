@@ -6,19 +6,33 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-SYMBOL = os.getenv('SYMBOL')
 LOT = os.getenv('LOT')
-TIMEFRAME = os.getenv('TIMEFRAME')
+SYMBOL = os.getenv('SYMBOL')
 
-def symbol_verifier():
+def symbol_verifier(symbol):
     all_symbols = mt5.symbols_get()
-    for symbol in all_symbols:
-        if symbol.name == SYMBOL:
+    for ativo in all_symbols:
+        if ativo.name == symbol:
             return True
     return False
 
 
-def get_dt(timeframe=mt5.TIMEFRAME_M5):
+def get_dt(timeframe):
+
+    if (len(timeframe) == 2):
+        if (timeframe[0] == 'M'):
+            if(timeframe[1] == '1'):
+                timeframe = mt5.TIMEFRAME_M1
+            elif(timeframe[1] == '2'):
+                timeframe = mt5.TIMEFRAME_M2
+            elif(timeframe[1] == '5'):
+                timeframe = mt5.TIMEFRAME_M5
+    elif (len(timeframe) == 3):
+        if (timeframe[0] == 'M'):
+            if (timeframe[1:3] == '10'):
+                timeframe = mt5.TIMEFRAME_M10
+            elif (timeframe[1:3]  == '15'):
+                timeframe = mt5.TIMEFRAME_M15
 
     # Timezone de SP e define o horário de agora (se for forex +6 horas)
     timezone = pytz.timezone("America/Sao_Paulo")
@@ -29,8 +43,8 @@ def get_dt(timeframe=mt5.TIMEFRAME_M5):
         now = datetime.now(timezone) + timedelta(hours=6)
 
     rates = mt5.copy_rates_from(SYMBOL, timeframe, now, 99999)
-    dt = pd.DataFrame(rates)
 
+    dt = pd.DataFrame(rates)
     dt = dt.iloc[:-1]
 
     dt['time'] = pd.to_datetime(dt['time'], unit='s')
@@ -86,7 +100,7 @@ def fibonacci(dt):
 
 
 def tendencia(dt):
-    last120 = dt.tail(120)
+    last120 = dt.tail(90)
     last30 = dt.tail(30)
     negPoints = 0
     posPoints = 0
@@ -103,16 +117,10 @@ def tendencia(dt):
             negPoints += 1
 
     if negPoints > posPoints and float(posPoints / negPoints) < 0.85:
-        print("Tendencia macro negativa (-)")
-        print("Pontos positivos: ", posPoints, " e pontos negativos: ", negPoints)
         macro = 'n'
     elif negPoints < posPoints and float(negPoints / posPoints) < 0.85:
-        print("Tendencia macro positiva (+)")
-        print("Pontos positivos: ", posPoints, " e pontos negativos: ", negPoints)
         macro = 'p'
     elif negPoints == posPoints or float(negPoints / posPoints) > 0.85 or float(posPoints / negPoints) > 0.85:
-        print("Tendencia macro consolidação (=)")
-        print("Pontos positivos: ", posPoints, " e pontos negativos: ", negPoints)
         macro = 'c'
 
     # Checa tendencia micro
@@ -127,21 +135,21 @@ def tendencia(dt):
             negPoints += 1
 
     if negPoints > posPoints and float(posPoints / negPoints) < 0.85:
-        print("Tendencia micro negativa (-)")
-        print("Pontos positivos: ", posPoints, " e pontos negativos: ", negPoints)
         micro = 'n'
     elif negPoints < posPoints and float(negPoints / posPoints) < 0.85:
-        print("Tendencia micro positiva (+)")
-        print("Pontos positivos: ", posPoints, " e pontos negativos: ", negPoints)
         micro = 'p'
     elif negPoints == posPoints or float(negPoints / posPoints) > 0.85 or float(posPoints / negPoints) > 0.85:
-        print("Tendencia micro consolidação (=)")
-        print("Pontos positivos: ", posPoints, " e pontos negativos: ", negPoints)
         micro = 'c'
 
-    if(macro == micro):
-        print("Tendências estão alinhadas!")
-        return True
+    if(macro == micro and macro == 'p'):
+        print("Tendências estão alinhadas e é tendência positiva")
+        return macro
+    elif(macro == micro and macro == 'n'):
+        print("Tendências estão alinhadas e é tendência negativa")
+        return macro
+    elif(macro == micro and macro == 'c'):
+        print("Tendências estão alinhadas, mas é consolidação")
+        return False
     else:
         print("Tendências não estão alinhadas.")
         return False
@@ -156,19 +164,20 @@ def ponto_continuo(dt, forex=False):
 
     # 2 - De acordo com a tendência, analisar se é ponto contínuo
     comp_val_candles = 50
-    comp_val_ma = 15
+    comp_val_ma = 20
 
     if forex:
         comp_val_candles = comp_val_candles / 10
         comp_val_ma = comp_val_ma / 10
 
-    if tend:
+    if tend == 'n':
         if float(lastCandle['MA20']) > float(lastCandle['MA9']) and float(
                 (lastCandle['open']) - float(lastCandle['close']) > comp_val_candles):
             if abs(float(lastCandle['MA20']) - float(lastCandle['open'])) <= comp_val_ma or abs(
                     float(lastCandle['MA20']) - float(lastCandle['high'])) <= comp_val_ma:
                 if float(lastCandle['close']) <= float(lastCandle['MA9']):
                     return 'SELL'
+    elif tend == 'p':
         if float(lastCandle['MA20']) < float(lastCandle['MA9']) and float(
                 (lastCandle['close']) - float(lastCandle['open']) > comp_val_candles):
             if abs(float((lastCandle['open'] - lastCandle['MA20']))) <= comp_val_ma or abs(
@@ -181,7 +190,7 @@ def ponto_continuo(dt, forex=False):
         return 'NONE'
 
 
-def send_order(order_type, forex=False):
+def send_order(order_type, timeframe, forex=False):
     # Confirma se a ação realmente existe
 
     print("Enviando ordem de ", order_type, " para o  servidor")
@@ -198,13 +207,17 @@ def send_order(order_type, forex=False):
     price = mt5.symbol_info_tick(SYMBOL).ask
 
     deviation = 20
-    fibo = fibonacci(get_dt())
+    fibo = fibonacci(get_dt(timeframe))
+    if order_type == 'BUY':
+        margin = round((fibo['150'] - fibo['0']) * 0.1)
+    elif order_type == 'SELL':
+        margin = round((fibo['0'] - fibo['150']) * 0.1)
 
-
+    margin = margin - (margin % 5)
     if order_type == 'BUY' and not forex:
         order_type = mt5.ORDER_TYPE_BUY
-        sl = fibo['0'] - 50 * point
-        tp = fibo['150'] - 100 * point
+        sl = fibo['0'] - margin * point
+        tp = fibo['150'] - margin * point
     elif order_type == 'SELL' and not forex:
         order_type = mt5.ORDER_TYPE_SELL
         sl = fibo['0'] + 50 * point
